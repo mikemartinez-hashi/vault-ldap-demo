@@ -70,10 +70,10 @@ elseif ($Phase -eq "2") {
         try {
             Import-Module ActiveDirectory -ErrorAction Stop
             Get-ADDomain -ErrorAction Stop | Out-Null
-            Write-Log "AD DS is ready after ${Elapsed}s."
+            Write-Log "AD DS is ready after $Elapsed s."
             break
         } catch {
-            Write-Log "AD DS not ready yet (${Elapsed}s elapsed) - retrying in 10s..."
+            Write-Log "AD DS not ready yet ($Elapsed s elapsed) - retrying in 10s..."
             Start-Sleep -Seconds 10
             $Elapsed += 10
         }
