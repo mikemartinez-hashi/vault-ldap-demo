@@ -6,17 +6,14 @@
 
 # ---- Local values ----
 locals {
-  # Derive LDAP base DN from domain variable
-  # e.g. "example.com" -> "dc=example,dc=com"
   ldap_base_dn = join(",", [for part in split(".", var.ldap_domain) : "dc=${part}"])
 
-  # Compute full static role configs with auto-derived DNs
-  # The DN is constructed as: cn=<username>,ou=ServiceAccounts,<base_dn>
-  # This matches what user_data.sh creates on the LDAP server.
+  # AD DN format: CN=<username>,OU=ServiceAccounts,<base_dn>
+  # Must match exactly what New-ADUser creates in user_data.ps1
   ldap_static_roles_computed = {
     for role_name, role in var.ldap_static_roles : role_name => {
       username        = role.username
-      dn              = "cn=${role.username},ou=ServiceAccounts,${local.ldap_base_dn}"
+      dn              = "CN=${role.username},OU=ServiceAccounts,${local.ldap_base_dn}"
       rotation_period = role.rotation_period
     }
   }
@@ -24,28 +21,24 @@ locals {
 
 # ---- Enable and configure Vault LDAP Secrets Engine ----
 resource "vault_ldap_secret_backend" "ldap" {
-  # namespace is inherited from VAULT_NAMESPACE env var set on the Vault provider.
-  # Do NOT set it here - it would be appended to the provider namespace (admin/admin).
+  # namespace inherited from VAULT_NAMESPACE env var - do not set here
   path = var.vault_ldap_mount_path
 
-  # Bind credentials - admin account used for this demo.
-  # In production, replace with a dedicated service account with minimal permissions.
-  binddn   = "cn=admin,${local.ldap_base_dn}"
+  # Bind as the built-in Administrator account
+  # In AD, Administrator lives in CN=Users, not an OU
+  binddn   = "CN=Administrator,CN=Users,${local.ldap_base_dn}"
   bindpass = var.ldap_admin_password
 
-  # Connect to the EC2 LDAP server via its public IP.
-  # Using plain LDAP (389) for this demo - use LDAPS in production.
   url          = "ldap://${aws_eip.ldap_eip.public_ip}"
   insecure_tls = true
 
-  # Where Vault should look for user accounts
-  userdn   = "ou=ServiceAccounts,${local.ldap_base_dn}"
-  userattr = "cn"
+  # AD uses sAMAccountName (short login name) as the user identifier
+  userdn   = "OU=ServiceAccounts,${local.ldap_base_dn}"
+  userattr = "sAMAccountName"
 
-  # Description
-  description = "LDAP secrets engine for AWS LDAP demo - managed by HCP Terraform"
+  description = "LDAP secrets engine - Active Directory - managed by HCP Terraform"
 
-  # Wait for the full bootstrap sleep before attempting LDAP connection
+  # Wait for full AD DS bootstrap (Phase 1 reboot + Phase 2 account creation)
   depends_on = [time_sleep.wait_for_ldap_bootstrap]
 }
 

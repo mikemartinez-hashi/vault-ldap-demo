@@ -45,21 +45,18 @@ provider "vault" {
   # VAULT_ADDR and VAULT_TOKEN should be set as environment variables
 }
 
-# Public Ubuntu 24.04 LTS AMI (Canonical)
-# Using the official Canonical AMI to ensure broad AWS account access.
-data "aws_ami" "ubuntu_24_04" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-
+# Windows Server 2022 Full Base AMI (Amazon-owned)
+data "aws_ami" "hc-base-windows" {
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+    values = ["hc-base-windows-server-2025*"]
   }
-
   filter {
     name   = "state"
     values = ["available"]
   }
+  most_recent = true
+  owners      = ["888995627335"] # ami-prod account
 }
 
 # VPC Configuration
@@ -143,11 +140,11 @@ resource "aws_security_group" "ldap_sg" {
     cidr_blocks = var.allowed_cidr_blocks
   }
 
-  # SSH
+  # RDP - Windows remote access (SSM Session Manager is preferred)
   ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
+    description = "RDP"
+    from_port   = 3389
+    to_port     = 3389
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
@@ -211,27 +208,28 @@ resource "aws_key_pair" "ldap_key" {
   }
 }
 
-# EC2 Instance for LDAP Server
+# EC2 Instance - Windows Server 2022 Domain Controller
 resource "aws_instance" "ldap_server" {
-  ami                    = data.aws_ami.ubuntu_24_04.id
-  instance_type          = var.instance_type
+  ami                    = data.aws_ami.hc-base-windows.id
+  instance_type          = "t3.large" # AD DS minimum - do not go below this
   subnet_id              = aws_subnet.ldap_public_subnet.id
   vpc_security_group_ids = [aws_security_group.ldap_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ldap_instance_profile.name
-  key_name               = var.ssh_public_key != null ? aws_key_pair.ldap_key[0].key_name : null
+  # No SSH key - access via SSM Session Manager
 
-  user_data = templatefile("${path.module}/user_data.sh", {
+  user_data = templatefile("${path.module}/user_data.ps1", {
     ldap_domain         = var.ldap_domain
     ldap_organization   = var.ldap_organization
     ldap_admin_password = var.ldap_admin_password
     vault_addr          = var.vault_addr
     vault_namespace     = var.vault_namespace
-    # Derived base DN passed in so the script doesn't need to parse the domain itself
-    ldap_base_dn = local.ldap_base_dn
+    ldap_base_dn        = local.ldap_base_dn
+    # NetBIOS name = first label of domain, uppercased (e.g. "example.com" -> "EXAMPLE")
+    ldap_netbios_name   = upper(split(".", var.ldap_domain)[0])
   })
 
   root_block_device {
-    volume_size           = 20
+    volume_size           = 50 # Windows Server 2022 requires more space than Linux
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = true
@@ -258,10 +256,11 @@ resource "aws_eip" "ldap_eip" {
   depends_on = [aws_internet_gateway.ldap_igw]
 }
 
-# Wait for user_data bootstrap to complete before Vault connects to LDAP.
-# user_data.sh installs snap, SSM agent, slapd, and creates accounts - takes ~3-4 min.
-# Without this, Vault tries to reach port 389 before slapd is listening.
+# Wait for AD DS bootstrap to complete:
+# Phase 1 (~3 min): role install + forest creation + reboot
+# Phase 2 (~3 min): post-reboot AD stabilization + account creation
+# 10 minutes total is conservative but reliable.
 resource "time_sleep" "wait_for_ldap_bootstrap" {
   depends_on      = [aws_eip.ldap_eip]
-  create_duration = "240s"
+  create_duration = "600s"
 }
