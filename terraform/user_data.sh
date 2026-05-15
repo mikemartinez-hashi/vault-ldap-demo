@@ -50,6 +50,11 @@ echo "==> Configuring AWS SSM Agent..."
 echo "==> SSM Agent setup complete (non-fatal if any step failed)."
 
 # ---- Install OpenLDAP ----
+# debconf-set-selections lives in debconf-utils - must install it first or the
+# slapd pre-seed silently does nothing and slapd installs with dc=nodomain.
+echo "==> Installing debconf-utils for slapd pre-seeding..."
+apt-get install -y debconf-utils
+
 echo "==> Pre-configuring slapd debconf answers..."
 debconf-set-selections <<DEBCONF
 slapd slapd/password1 password $${LDAP_ADMIN_PASS}
@@ -60,11 +65,32 @@ slapd slapd/backend select MDB
 slapd slapd/purge_database boolean false
 slapd slapd/move_old_database boolean true
 slapd slapd/no_configuration boolean false
-slapd slapd/dump_database select when needed
 DEBCONF
+
+echo "==> Verifying debconf pre-seed was accepted..."
+debconf-show slapd | grep -E "domain|backend|no_configuration" || true
 
 echo "==> Installing slapd and ldap-utils..."
 apt-get install -y slapd ldap-utils
+
+# Safety net: if debconf-set-selections was somehow missed on a previous run
+# and slapd is already installed with the wrong base DN, reconfigure it now.
+CURRENT_BASE_DN=$$(slapcat 2>/dev/null | grep "^dn:" | head -1 | awk '{print $2}' || true)
+echo "==> Detected slapd base DN: $${CURRENT_BASE_DN:-unknown}"
+if [[ -n "$${CURRENT_BASE_DN}" && "$${CURRENT_BASE_DN}" != "$${LDAP_BASE_DN}" ]]; then
+  echo "==> Base DN mismatch - reconfiguring slapd with correct domain..."
+  debconf-set-selections <<DEBCONF2
+slapd slapd/password1 password $${LDAP_ADMIN_PASS}
+slapd slapd/password2 password $${LDAP_ADMIN_PASS}
+slapd slapd/domain string $${LDAP_DOMAIN}
+slapd shared/organization string $${LDAP_ORG}
+slapd slapd/backend select MDB
+slapd slapd/purge_database boolean true
+slapd slapd/move_old_database boolean true
+slapd slapd/no_configuration boolean false
+DEBCONF2
+  DEBIAN_FRONTEND=noninteractive dpkg-reconfigure slapd
+fi
 
 # ---- Ensure slapd listens on all interfaces (0.0.0.0:389) ----
 # Ubuntu 24.04 slapd defaults to ldap:/// (all interfaces) but verify explicitly.
