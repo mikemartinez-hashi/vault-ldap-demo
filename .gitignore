@@ -1,0 +1,31 @@
+# Terraform state and local cache
+**/.terraform/
+**/.terraform.lock.hcl
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/terraform.tfstate.d/
+
+# Variable files with secrets -- never commit these
+**/terraform.tfvars
+**/*.auto.tfvars
+
+# Generated migration artifacts
+**/audit-report.json
+**/audit-report.txt
+**/cutover-runbook.json
+**/cutover-runbook.txt
+**/validation-report.json
+**/validation-report.txt
+**/set-vault-env.sh
+
+# Vault snapshots
+*.snap
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
