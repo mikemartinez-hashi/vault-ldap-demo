@@ -3,10 +3,10 @@
 
 terraform {
   required_version = ">= 1.6.0"
-  
+
   cloud {
     organization = "mikes_sandbox"
-    
+
     workspaces {
       name = "aws-ldap-vault-rotation"
     }
@@ -30,7 +30,7 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
-  
+
   default_tags {
     tags = {
       Environment = var.environment
@@ -224,10 +224,10 @@ resource "aws_instance" "ldap_server" {
     ldap_domain         = var.ldap_domain
     ldap_organization   = var.ldap_organization
     ldap_admin_password = var.ldap_admin_password
-    vault_addr          = var.TFC_VAULT_ADDR
-    vault_namespace     = var.TFC_VAULT_NAMESPACE
+    vault_addr          = var.vault_addr
+    vault_namespace     = var.vault_namespace
     # Derived base DN passed in so the script doesn't need to parse the domain itself
-    ldap_base_dn        = local.ldap_base_dn
+    ldap_base_dn = local.ldap_base_dn
   })
 
   root_block_device {
