@@ -256,11 +256,8 @@ resource "aws_eip" "ldap_eip" {
   depends_on = [aws_internet_gateway.ldap_igw]
 }
 
-# Wait for AD DS bootstrap to complete:
-# Phase 1 (~3 min): role install + forest creation + reboot
-# Phase 2 (~3 min): post-reboot AD stabilization + account creation
-# 10 minutes total is conservative but reliable.
+# 12 minutes: Phase 1 (~4 min) + reboot (~2 min) + Phase 2 (~4 min) + NTDS cert restart (~2 min)
 resource "time_sleep" "wait_for_ldap_bootstrap" {
   depends_on      = [aws_eip.ldap_eip]
-  create_duration = "600s"
+  create_duration = "720s"
 }

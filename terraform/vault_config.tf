@@ -29,7 +29,9 @@ resource "vault_ldap_secret_backend" "ldap" {
   binddn   = "CN=Administrator,CN=Users,${local.ldap_base_dn}"
   bindpass = var.ldap_admin_password
 
-  url          = "ldap://${aws_eip.ldap_eip.public_ip}"
+  # LDAPS (port 636, TLS) is required for AD password rotation.
+  # insecure_tls=true skips verification of the self-signed cert created in user_data.ps1.
+  url          = "ldaps://${aws_eip.ldap_eip.public_ip}"
   insecure_tls = true
 
   # AD uses sAMAccountName (short login name) as the user identifier
