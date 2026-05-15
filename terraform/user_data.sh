@@ -26,24 +26,31 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y -q
 
-# ---- Install AWS SSM Agent (not pre-installed on Canonical Ubuntu 24.04) ----
-# Using snap - the AWS-recommended method for Ubuntu.
-echo "==> Installing AWS SSM Agent..."
-snap install amazon-ssm-agent --classic
-systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
-systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
-sleep 3
+# ---- Ensure AWS SSM Agent is running (idempotent) ----
+# Canonical Ubuntu 24.04 AMIs ship with SSM agent pre-installed.
+# We just need to make sure it's enabled and running — never abort on this.
+echo "==> Configuring AWS SSM Agent..."
+{
+  if snap list amazon-ssm-agent > /dev/null 2>&1; then
+    echo "    SSM Agent already installed via snap - ensuring it is running..."
+    snap start amazon-ssm-agent || true
+    systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+    systemctl start  snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+  elif systemctl list-units --type=service | grep -q amazon-ssm-agent; then
+    echo "    SSM Agent installed as a systemd service - ensuring it is running..."
+    systemctl enable amazon-ssm-agent || true
+    systemctl start  amazon-ssm-agent  || true
+  else
+    echo "    SSM Agent not found - installing via snap..."
+    snap install amazon-ssm-agent --classic || true
+    systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+    systemctl start  snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+  fi
+} || true
+echo "==> SSM Agent setup complete (non-fatal if any step failed)."
 
-SSM_STATUS=$$(systemctl is-active snap.amazon-ssm-agent.amazon-ssm-agent.service || true)
-echo "==> SSM Agent status: $${SSM_STATUS}"
-if [[ "$${SSM_STATUS}" != "active" ]]; then
-  echo "WARNING: SSM Agent may not have started - check 'systemctl status snap.amazon-ssm-agent.amazon-ssm-agent.service'"
-else
-  echo "==> SSM Agent running. Session Manager is available."
-fi
-
-# ---- Install OpenLDAP packages ----
-# Pre-configure slapd non-interactively
+# ---- Install OpenLDAP ----
+echo "==> Pre-configuring slapd debconf answers..."
 debconf-set-selections <<DEBCONF
 slapd slapd/password1 password $${LDAP_ADMIN_PASS}
 slapd slapd/password2 password $${LDAP_ADMIN_PASS}
@@ -56,15 +63,43 @@ slapd slapd/no_configuration boolean false
 slapd slapd/dump_database select when needed
 DEBCONF
 
+echo "==> Installing slapd and ldap-utils..."
 apt-get install -y slapd ldap-utils
 
-# ---- Enable and start slapd ----
+# ---- Ensure slapd listens on all interfaces (0.0.0.0:389) ----
+# Ubuntu 24.04 slapd defaults to ldap:/// (all interfaces) but verify explicitly.
+echo "==> Configuring slapd listener..."
+if [ -f /etc/default/slapd ]; then
+  # Replace or append SLAPD_SERVICES to ensure external + local socket listeners
+  if grep -q "^SLAPD_SERVICES" /etc/default/slapd; then
+    sed -i 's|^SLAPD_SERVICES=.*|SLAPD_SERVICES="ldap:/// ldapi:///"|' /etc/default/slapd
+  else
+    echo 'SLAPD_SERVICES="ldap:/// ldapi:///"' >> /etc/default/slapd
+  fi
+  echo "    /etc/default/slapd updated."
+else
+  echo "    /etc/default/slapd not found - slapd will use compiled-in defaults (ldap:/// is usually the default)."
+fi
+
+# ---- Start slapd ----
 systemctl enable slapd
-systemctl start slapd
+systemctl restart slapd
 sleep 5
 
 echo "==> slapd status:"
-systemctl is-active slapd || { echo "ERROR: slapd failed to start"; exit 1; }
+systemctl is-active slapd || { echo "ERROR: slapd failed to start"; journalctl -u slapd --no-pager -n 30; exit 1; }
+
+# Confirm port 389 is actually listening before proceeding
+echo "==> Waiting for port 389 to be open..."
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if ss -tlnp | grep -q ':389'; then
+    echo "    OK: port 389 is listening (attempt $${i})"
+    break
+  fi
+  echo "    Attempt $${i}: port 389 not yet open - waiting 5s..."
+  sleep 5
+done
+ss -tlnp | grep ':389' || { echo "ERROR: slapd is not listening on port 389 after 50s"; exit 1; }
 
 # ---- Verify base DIT ----
 echo "==> Verifying base DN: $${LDAP_BASE_DN}"
@@ -121,19 +156,6 @@ userPassword: $${INITIAL_SVC_PASS}
 description: Service account for App2 - password managed by HCP Vault
 LDIF
 
-# ---- LDAP logging ----
-echo "==> Configuring LDAP logging..."
-cat > /etc/rsyslog.d/50-slapd.conf <<'RSYSLOG'
-local4.* /var/log/slapd.log
-RSYSLOG
-systemctl restart rsyslog || true
-
-# ---- Ensure slapd listens on all interfaces ----
-echo "==> Updating slapd listener config..."
-sed -i 's|SLAPD_SERVICES=.*|SLAPD_SERVICES="ldap:/// ldapi:///"|' /etc/default/slapd 2>/dev/null || true
-systemctl restart slapd
-sleep 3
-
 # ---- Verify service accounts ----
 echo "==> Verifying service accounts..."
 SVC_COUNT=$$(ldapsearch -x -H ldap://localhost \
@@ -144,29 +166,32 @@ SVC_COUNT=$$(ldapsearch -x -H ldap://localhost \
   | grep -c "^cn:" || true)
 echo "==> Found $${SVC_COUNT} service account(s) in ou=ServiceAccounts"
 
+# ---- LDAP logging ----
+cat > /etc/rsyslog.d/50-slapd.conf <<'RSYSLOG'
+local4.* /var/log/slapd.log
+RSYSLOG
+systemctl restart rsyslog || true
+
 # ---- Write health check script ----
 cat > /usr/local/bin/ldap-healthcheck.sh <<HEALTHCHECK
 #!/bin/bash
-# LDAP Health Check
 BASE_DN="$${LDAP_BASE_DN}"
 ADMIN_PASS="$${LDAP_ADMIN_PASS}"
 
 echo "=== LDAP Health Check at \$(date) ==="
-
 echo "--- slapd service ---"
 systemctl is-active slapd && echo "OK: slapd running" || echo "FAIL: slapd not running"
-
+echo "--- Port 389 ---"
+ss -tlnp | grep ':389' && echo "OK: listening on 389" || echo "FAIL: not listening on 389"
 echo "--- LDAP connectivity ---"
 ldapsearch -x -H ldap://localhost -b "\$${BASE_DN}" \
   -D "cn=admin,\$${BASE_DN}" -w "\$${ADMIN_PASS}" \
   "(objectClass=top)" dn 2>&1 | head -20
-
 echo "--- Service accounts ---"
 ldapsearch -x -H ldap://localhost \
   -D "cn=admin,\$${BASE_DN}" -w "\$${ADMIN_PASS}" \
   -b "ou=ServiceAccounts,\$${BASE_DN}" \
   "(objectClass=inetOrgPerson)" cn description 2>&1
-
 echo "=== Health check complete ==="
 HEALTHCHECK
 chmod +x /usr/local/bin/ldap-healthcheck.sh
