@@ -70,12 +70,12 @@ variable "ldap_admin_password" {
 }
 
 # Vault Configuration
-variable "vault_addr" {
+variable "TFC_VAULT_ADDR" {
   description = "HCP Vault cluster address"
   type        = string
 }
 
-variable "vault_namespace" {
+variable "TFC_VAULT_NAMESPACE" {
   description = "Vault namespace (use 'admin' for HCP Vault)"
   type        = string
   default     = "admin"

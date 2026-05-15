@@ -224,8 +224,8 @@ resource "aws_instance" "ldap_server" {
     ldap_domain         = var.ldap_domain
     ldap_organization   = var.ldap_organization
     ldap_admin_password = var.ldap_admin_password
-    vault_addr          = var.vault_addr
-    vault_namespace     = var.vault_namespace
+    vault_addr          = var.TFC_VAULT_ADDR
+    vault_namespace     = var.TFC_VAULT_NAMESPACE
     # Derived base DN passed in so the script doesn't need to parse the domain itself
     ldap_base_dn        = local.ldap_base_dn
   })
