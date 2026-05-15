@@ -45,8 +45,8 @@ resource "vault_ldap_secret_backend" "ldap" {
   # Description
   description = "LDAP secrets engine for AWS LDAP demo - managed by HCP Terraform"
 
-  # Wait for EC2 instance to be fully provisioned before configuring
-  depends_on = [aws_instance.ldap_server, aws_eip.ldap_eip]
+  # Wait for the full bootstrap sleep before attempting LDAP connection
+  depends_on = [time_sleep.wait_for_ldap_bootstrap]
 }
 
 # ---- Create Static Roles for Password Rotation ----

@@ -21,6 +21,10 @@ terraform {
       source  = "hashicorp/vault"
       version = "~> 4.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 }
 
@@ -252,4 +256,12 @@ resource "aws_eip" "ldap_eip" {
   }
 
   depends_on = [aws_internet_gateway.ldap_igw]
+}
+
+# Wait for user_data bootstrap to complete before Vault connects to LDAP.
+# user_data.sh installs snap, SSM agent, slapd, and creates accounts - takes ~3-4 min.
+# Without this, Vault tries to reach port 389 before slapd is listening.
+resource "time_sleep" "wait_for_ldap_bootstrap" {
+  depends_on      = [aws_eip.ldap_eip]
+  create_duration = "240s"
 }
