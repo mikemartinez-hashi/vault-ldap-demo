@@ -256,8 +256,8 @@ resource "aws_eip" "ldap_eip" {
   depends_on = [aws_internet_gateway.ldap_igw]
 }
 
-# 12 minutes: Phase 1 (~4 min) + reboot (~2 min) + Phase 2 (~4 min) + NTDS cert restart (~2 min)
+# 15 min: Phase1 forest (~4m) + reboot (~2m) + Phase2 accounts+cert (~4m) + reboot (~2m) + Phase3 LDAPS verify (~3m)
 resource "time_sleep" "wait_for_ldap_bootstrap" {
   depends_on      = [aws_eip.ldap_eip]
-  create_duration = "720s"
+  create_duration = "900s"
 }

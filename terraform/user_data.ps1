@@ -123,10 +123,10 @@ elseif ($Phase -eq "2") {
         Write-Log "Firewall rule note: $_"
     }
 
-    # ---- Configure LDAPS (required for AD password rotation) ----
-    # AD refuses password changes over plain LDAP (port 389).
-    # A certificate in the computer's Personal store enables port 636 (LDAPS).
-    Write-Log "Configuring LDAPS with a self-signed certificate..."
+    # ---- Configure LDAPS certificate ----
+    # AD needs a cert in the Personal store to enable port 636 (LDAPS).
+    # The cert is picked up ONLY after a full DC reboot - not just an NTDS restart.
+    Write-Log "Creating self-signed LDAPS certificate..."
     try {
         $CertParams = @{
             Subject           = "CN=$env:COMPUTERNAME"
@@ -137,34 +137,52 @@ elseif ($Phase -eq "2") {
             HashAlgorithm     = "SHA256"
             NotAfter          = (Get-Date).AddYears(5)
             KeyUsage          = @("DigitalSignature", "KeyEncipherment")
-            # Server Authentication OID
             TextExtension     = @("2.5.29.37={text}1.3.6.1.5.5.7.3.1")
         }
         $Cert = New-SelfSignedCertificate @CertParams
-        Write-Log "Created LDAPS certificate: $($Cert.Thumbprint)"
-
-        # Restart NTDS so AD picks up the cert and begins listening on port 636
-        Write-Log "Restarting NTDS service to activate LDAPS..."
-        Restart-Service -Name "NTDS" -Force
-        Start-Sleep -Seconds 30
-
-        # Verify port 636 is now listening
-        $LdapsTest = Test-NetConnection -ComputerName localhost -Port 636 -WarningAction SilentlyContinue
-        if ($LdapsTest.TcpTestSucceeded) {
-            Write-Log "LDAPS is active on port 636."
-        } else {
-            Write-Log "WARNING: Port 636 test failed - LDAPS may not be fully active yet."
-        }
+        Write-Log "LDAPS cert created: $($Cert.Thumbprint)"
     } catch {
-        Write-Log "WARNING: LDAPS certificate setup failed: $_"
+        Write-Log "WARNING: cert creation failed: $_"
+    }
+
+    # Set Phase 3 BEFORE rebooting so the next boot activates LDAPS verification
+    Set-Content -Path $PhaseFile -Value "3"
+    Write-Log "Phase 3 on next boot will confirm LDAPS on port 636. Rebooting..."
+    Restart-Computer -Force
+}
+
+# ============================================================
+# PHASE 3 - Post-cert-reboot: verify LDAPS is active
+# ============================================================
+elseif ($Phase -eq "3") {
+    Write-Log "Phase 3: Verifying LDAPS is active after cert reboot..."
+    Start-Sleep -Seconds 60
+
+    $MaxWait = 120
+    $Elapsed = 0
+    $LdapsReady = $false
+    while ($Elapsed -lt $MaxWait) {
+        $Test = Test-NetConnection -ComputerName localhost -Port 636 -WarningAction SilentlyContinue
+        if ($Test.TcpTestSucceeded) {
+            Write-Log "LDAPS is active on port 636 after $Elapsed s."
+            $LdapsReady = $true
+            break
+        }
+        Write-Log "Port 636 not ready yet ($Elapsed s) - retrying in 15s..."
+        Start-Sleep -Seconds 15
+        $Elapsed += 15
+    }
+
+    if (-not $LdapsReady) {
+        Write-Log "WARNING: Port 636 did not come up after $MaxWait s."
     }
 
     Set-Content -Path $PhaseFile -Value "done"
     Write-Log "============================================================"
     Write-Log "AD DS Bootstrap COMPLETE"
-    Write-Log "Domain    : $LdapDomain"
-    Write-Log "Accounts  : svc-app1, svc-app2 in OU=ServiceAccounts,$LdapBaseDn"
-    Write-Log "LDAPS     : ldaps://<eip>:636 (self-signed cert, insecure_tls=true)"
+    Write-Log "Domain   : $LdapDomain"
+    Write-Log "Accounts : svc-app1, svc-app2 in OU=ServiceAccounts,$LdapBaseDn"
+    Write-Log "LDAPS    : port 636 active = $LdapsReady"
     Write-Log "============================================================"
 }
 
