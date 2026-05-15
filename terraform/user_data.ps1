@@ -27,6 +27,7 @@ $Phase = if (Test-Path $PhaseFile) { (Get-Content $PhaseFile).Trim() } else { "1
 Write-Log "============================================================"
 Write-Log "AD DS Bootstrap - Phase $Phase"
 Write-Log "Domain  : $LdapDomain"
+Write-Log "Org     : $LdapOrg"
 Write-Log "Base DN : $LdapBaseDn"
 Write-Log "============================================================"
 
@@ -83,7 +84,7 @@ elseif ($Phase -eq "2") {
         New-ADOrganizationalUnit `
             -Name "ServiceAccounts" `
             -Path $LdapBaseDn `
-            -Description "Service accounts managed by HCP Vault" `
+            -Description "$LdapOrg - Service accounts managed by HCP Vault" `
             -ErrorAction Stop
         Write-Log "Created OU: ou=ServiceAccounts,$LdapBaseDn"
     } catch {
