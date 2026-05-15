@@ -24,8 +24,9 @@ locals {
 
 # ---- Enable and configure Vault LDAP Secrets Engine ----
 resource "vault_ldap_secret_backend" "ldap" {
-  namespace = var.vault_namespace
-  path      = var.vault_ldap_mount_path
+  # namespace is inherited from VAULT_NAMESPACE env var set on the Vault provider.
+  # Do NOT set it here - it would be appended to the provider namespace (admin/admin).
+  path = var.vault_ldap_mount_path
 
   # Bind credentials - admin account used for this demo.
   # In production, replace with a dedicated service account with minimal permissions.
@@ -54,8 +55,8 @@ resource "vault_ldap_secret_backend" "ldap" {
 resource "vault_ldap_secret_backend_static_role" "roles" {
   for_each = local.ldap_static_roles_computed
 
-  namespace = var.vault_namespace
-  mount     = vault_ldap_secret_backend.ldap.path
+  # namespace inherited from provider - do not set here
+  mount = vault_ldap_secret_backend.ldap.path
 
   role_name       = each.key
   username        = each.value.username
